@@ -1,0 +1,175 @@
+<!doctype html>
+<html>
+	<head>
+		<title>Ocean floor</title>
+		<link rel="stylesheet" href="./config.css">
+		<script src="./config.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/regl/1.3.1/regl.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.4.0/gl-matrix-min.js"></script>
+		<script id="FlowVertex" type="x-shader/x-vertex">
+			precision lowp float;
+
+			attribute vec2 position;
+			attribute float rowOffset;
+			uniform sampler2D noise;
+
+			uniform mat4 mvpMatrix;
+			uniform float time;
+
+			varying vec3 color;
+
+			uniform vec3 backgroundColor;
+
+			void main() {
+				vec2 translated = position;
+				translated.y += mod( rowOffset + time, 1.0 );
+				float z = texture2D( noise, position.xy + vec2( 0.0, rowOffset ) ).a;
+				gl_Position = mvpMatrix * vec4( translated, z / 8.5, 1.0 );
+				
+				vec2 cxy = translated * vec2( 2.0, 1.0 ) - 1.0;
+				float radius = dot( cxy, cxy );
+				float opacity = max( 0.0, 1.0 - radius );
+				opacity *= opacity;
+				color = mix( backgroundColor, backgroundColor * 0.7 + 0.7, opacity );
+			}
+		</script>
+		<script id="FlowFragment" type="x-shader/x-fragment">
+			precision lowp float;
+
+			varying vec3 color;
+
+			void main() {
+				gl_FragColor = vec4( color, 1.0 );
+			}
+		</script>
+	</head>
+	<body>
+		<script>
+			const regl = createREGL( {
+				attributes: {
+					antialias: false
+				},
+				extensions: [
+					"ANGLE_instanced_arrays"
+				]
+			} );
+
+			const RESOLUTION = 40;
+			const NUM_VERTICES = RESOLUTION * 2;
+
+			function makeVertices() {
+				const vertices = new Float32Array( NUM_VERTICES * 2 );
+				const yPos1 = -1 / ( RESOLUTION - 1 ) / 2;
+				const yPos2 = -yPos1;
+				let numVertices = 0;
+				for( let x = 0; x < RESOLUTION; x++ ) {
+					const xPos = x / ( RESOLUTION - 1 );
+					vertices[ numVertices++ ] = xPos;
+					vertices[ numVertices++ ] = yPos1;
+					
+					vertices[ numVertices++ ] = xPos;
+					vertices[ numVertices++ ] = yPos2;
+				}
+				return vertices;
+			}
+			
+			function makeRowOffsets() {
+				const rowOffsets = new Float32Array( RESOLUTION );
+				let numRowOffsets = 0;
+				for( let y = 1; y < RESOLUTION; y++ ) {
+					rowOffsets[ numRowOffsets++ ] = y / ( RESOLUTION - 1 );
+				}
+				return rowOffsets;
+			}
+			
+			function makeNoise() {
+				const noise = new Uint8Array( RESOLUTION * RESOLUTION );
+				let yOffset = 0;
+				for( let y = 0; y < RESOLUTION - 1; y++ ) {
+					for( let x = 0; x < RESOLUTION; x++ ) {
+						noise[ yOffset + x ] = Math.round( Math.random() * 25 + Math.sin( x * 2 / RESOLUTION ) * 5 ) / 30 * 256 >>> 0;
+					}
+					yOffset += RESOLUTION;
+				}
+				for( let x = 0; x < RESOLUTION; x++ ) {
+					noise[ yOffset + x ] = noise[ x ];
+				}
+				return noise;
+			}
+
+			const draw = regl( {
+				vert: FlowVertex.firstChild.nodeValue,
+				frag: FlowFragment.firstChild.nodeValue,
+				primitive: "triangle strip",
+				count: NUM_VERTICES,
+				instances: RESOLUTION - 1,
+				attributes: {
+					position: makeVertices(),
+					rowOffset: {
+						buffer: regl.buffer( makeRowOffsets() ),
+						divisor: 1
+					}
+				},
+				uniforms: {
+					noise: regl.texture( {
+						data: makeNoise(),
+						format: "alpha",
+						shape: [ RESOLUTION, RESOLUTION ]
+					} ),
+					backgroundColor: regl.prop("backgroundColor"),
+					time: regl.prop( "time" ),
+					mvpMatrix: regl.prop( "mvpMatrix" )
+				},
+				depth: {
+					enable: true
+				}
+			} );
+
+			const flowModelViewMatrix = mat4.create();
+			const flowProjectionMatrix = mat4.create();
+
+			function updateProjection() {
+				const aspectRatio = window.innerWidth / window.innerHeight;
+				const aspectOffset = aspectRatio > 1 ? aspectRatio - 1 : 0;
+				mat4.identity( flowModelViewMatrix );
+				mat4.rotate( flowModelViewMatrix, flowModelViewMatrix, Math.PI / 2, [ 1, 0, 0 ] );
+				mat4.translate( flowModelViewMatrix, flowModelViewMatrix, [ -1, -3.625 - aspectOffset, 0.625 ] );
+				mat4.scale( flowModelViewMatrix, flowModelViewMatrix, [ 2, 2 + aspectOffset, 1 ] );
+				
+				mat4.perspective( flowProjectionMatrix, 40 * Math.PI / 180, aspectRatio - aspectOffset, 1, 10 );
+				mat4.multiply( drawParams.mvpMatrix, flowProjectionMatrix, flowModelViewMatrix );
+			}
+
+			const drawParams = {
+				time: 0,
+				mvpMatrix: mat4.create()
+			};
+
+			updateProjection();
+			window.onresize = updateProjection;
+
+			const config = new Configuration( document.body );
+			config.addList( "Color", [
+					[ "slate", [  46,  59,  74 ] ],
+					[ "steel", [ 55, 55, 55 ] ],
+					[ "navy", [ 27, 42, 65 ] ],
+					[ "jade", [ 37, 68, 65 ] ],
+					[ "violet", [ 59, 28, 50 ] ],
+					[ "earth", [ 63, 40, 25 ] ],
+					[ "graphite", [ 30, 30, 30 ] ],
+					[ "coal", [ 0, 0, 0 ] ],
+				], "slate", ( color ) => drawParams.backgroundColor = color.map( n => n / 255 ) );
+			config.addRange( "Speed", .375, -3, 3, 0.01, flowSpeed => drawParams.flowSpeed = flowSpeed );
+
+			let lastTime = 0;
+
+			var tick = regl.frame( ( context ) => {
+				regl.clear( { color: [ ...drawParams.backgroundColor, 1.0 ] } );
+				drawParams.time = ( drawParams.time + ( context.time - lastTime ) * drawParams.flowSpeed ) % 1;
+				lastTime = context.time;
+				draw( drawParams );
+			} );
+			//requestAnimationFrame(tick.cancel);
+		</script>
+	</body>
+</html>
