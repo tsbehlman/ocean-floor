@@ -22,7 +22,7 @@
 
 			void main() {
 				vec2 translated = position;
-				translated.y += mod( rowOffset + time, 1.0 );
+				translated.y += fract( rowOffset + time );
 				float z = texture2D( noise, position.xy + vec2( 0.0, rowOffset ) ).a;
 				gl_Position = mvpMatrix * vec4( translated, z / 8.5, 1.0 );
 				
@@ -159,7 +159,7 @@
 					[ "graphite", [ 30, 30, 30 ] ],
 					[ "coal", [ 0, 0, 0 ] ],
 				], "slate", ( color ) => drawParams.backgroundColor = color.map( n => n / 255 ) );
-			config.addRange( "Speed", .375, -3, 3, 0.01, flowSpeed => drawParams.flowSpeed = flowSpeed );
+			config.addRange( "Speed", .18, -3, 3, 0.01, flowSpeed => drawParams.flowSpeed = flowSpeed );
 
 			let lastTime = 0;
 
